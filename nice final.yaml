@@ -5,7 +5,6 @@ esphome:
       then:
         # Pinul 23 trebuie să fie LOW pentru a scoate cipul CAN din Standby
         - output.turn_off: can_se_pin
-        #- output.turn_on: relay_power_pin
     - priority: 100
       then:
         - light.turn_on:
@@ -29,10 +28,7 @@ output:
   - platform: gpio
     pin: 23
     id: can_se_pin
-  #- platform: gpio
-    #pin: GPIO5
-    #id: relay_power_pin
-
+  
 uart:
   id: uart_bus
   # Pinii dedicați transceiver-ului CAN pe placa LilyGo T-CAN485
@@ -48,15 +44,15 @@ external_components:
       path: my_components
 
 wifi:
-  ssid: "Oreo"
-  password: "Larisa.25"
+  ssid: "wifi_ssid"
+  password: "wifi_password"
   fast_connect: true
   power_save_mode: NONE
-  # Adaugă un IP static compatibil cu routerul tău
+  #  IP static 
   manual_ip:
     static_ip: 192.168.0.13 # Exemplu
-    gateway: 192.168.0.1
-    subnet: 255.255.255.0
+    gateway: 192.168.0.1 #conform setarilor retelei
+    subnet: 255.255.255.0 #conform setarilor retelei
   on_connect:
     - light.turn_on:
           id: status_led_rgb
@@ -68,7 +64,7 @@ wifi:
           id: status_led_rgb
           red: 100%
           green: 0%
-          blue: 0% # ROȘU: Wi-Fi Picat
+          blue: 0% # ROȘU: Wi-Fi Error
 
 
 api:
@@ -78,13 +74,13 @@ api:
           id: status_led_rgb
           red: 0%
           green: 100%
-          blue: 0% # VERDE: Totul OK
+          blue: 0% # VERDE: Everything OK
   on_client_disconnected:
     - light.turn_on:
           id: status_led_rgb
           red: 100%
           green: 80%
-          blue: 0% # GALBEN: A picat doar conexiunea cu HA
+          blue: 0% # GALBEN: lost connection HA
 
 ota:
   - platform: esphome
@@ -118,7 +114,7 @@ globals:
     initial_value: 'false'
   - id: l1_state
     type: bool
-    restore_value: yes # Asta ține minte valoarea la restart!
+    restore_value: yes # Remember value after restart!
 
 button:
   - platform: template
@@ -349,7 +345,6 @@ number:
     step: 10
     unit_of_measurement: "%"
     optimistic: true
-    #initial_value: 50
     restore_value: true
     set_action:
       - lambda: |-
@@ -365,7 +360,6 @@ number:
     step: 10
     unit_of_measurement: "%"
     optimistic: true
-    #initial_value: 50
     restore_value: true
     set_action:
       - lambda: |-
@@ -381,7 +375,6 @@ number:
     step: 5
     unit_of_measurement: "%"
     optimistic: true
-    #initial_value: 50
     restore_value: true
     set_action:
       - lambda: |-
@@ -397,7 +390,6 @@ number:
     step: 1
     unit_of_measurement: "s"
     optimistic: true
-   # initial_value: 30
     restore_value: true
     set_action:
       - lambda: |-
