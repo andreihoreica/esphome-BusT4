@@ -1,0 +1,423 @@
+esphome:
+  name: nice-gate
+  on_boot:
+    - priority: 800
+      then:
+        # Pinul 23 trebuie să fie LOW pentru a scoate cipul CAN din Standby
+        - output.turn_off: can_se_pin
+        #- output.turn_on: relay_power_pin
+    - priority: 100
+      then:
+        - light.turn_on:
+            id: status_led_rgb
+            brightness: 100%
+            red: 0%
+            green: 0%
+            blue: 100%          
+    - priority: -100
+      then:
+        - delay: 10s # Așteptăm 10 secunde să se calmeze toate componentele
+        - lambda: 'id(system_ready) = true;'
+        - logger.log: ">>> SISTEMUL ESTE GATA, COMENZILE SUNT DEBLOCATE <<<"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+output:
+  - platform: gpio
+    pin: 23
+    id: can_se_pin
+  #- platform: gpio
+    #pin: GPIO5
+    #id: relay_power_pin
+
+uart:
+  id: uart_bus
+  # Pinii dedicați transceiver-ului CAN pe placa LilyGo T-CAN485
+  tx_pin: 27
+  rx_pin: 26
+  baud_rate: 19200
+  rx_buffer_size: 512
+
+external_components:
+  #- source: github://makstech/esphome-BusT4
+  - source:
+      type: local
+      path: my_components
+
+wifi:
+  ssid: "Oreo"
+  password: "Larisa.25"
+  fast_connect: true
+  power_save_mode: NONE
+  # Adaugă un IP static compatibil cu routerul tău
+  manual_ip:
+    static_ip: 192.168.0.13 # Exemplu
+    gateway: 192.168.0.1
+    subnet: 255.255.255.0
+  on_connect:
+    - light.turn_on:
+          id: status_led_rgb
+          red: 100%
+          green: 80%
+          blue: 0% # GALBEN: Wi-Fi OK
+  on_disconnect:
+    - light.turn_on:
+          id: status_led_rgb
+          red: 100%
+          green: 0%
+          blue: 0% # ROȘU: Wi-Fi Picat
+
+
+api:
+  reboot_timeout: 0s
+  on_client_connected:
+    - light.turn_on:
+          id: status_led_rgb
+          red: 0%
+          green: 100%
+          blue: 0% # VERDE: Totul OK
+  on_client_disconnected:
+    - light.turn_on:
+          id: status_led_rgb
+          red: 100%
+          green: 80%
+          blue: 0% # GALBEN: A picat doar conexiunea cu HA
+
+ota:
+  - platform: esphome
+
+web_server:
+  port: 80
+
+logger:
+  level: DEBUG
+  baud_rate: 115200
+  #level: VERY_VERBOSE
+  #baud_rate: 0
+
+  
+bus_t4:
+  uart_id: uart_bus
+  address: 0x55
+
+cover:
+  - platform: bus_t4
+    name: "Poarta Nice"
+    id: nice_cover
+    auto_learn_timing: true       # Auto-learn open/close duration
+    open_duration: 20s            # Initial/fallback open time
+    close_duration: 20s           # Initial/fallback close time
+    position_report_interval: 1s  # Position update rate
+
+globals:
+  - id: system_ready
+    type: bool
+    initial_value: 'false'
+  - id: l1_state
+    type: bool
+    restore_value: yes # Asta ține minte valoarea la restart!
+
+button:
+  - platform: template
+    name: "Nice Open"
+    on_press:
+      - cover.open: nice_cover
+  - platform: template
+    name: "Nice Close"
+    on_press:
+      - cover.close: nice_cover
+
+  - platform: template
+    name: "Partial Open 1"
+    icon: "mdi:gate-arrow-right"
+    on_press:
+      - lambda: id(nice_cover).send_cmd(CMD_OPEN_PARTIAL_1);
+
+  - platform: template
+    name: "Partial Open 2"
+    icon: "mdi:gate-arrow-right"
+    on_press:
+      - lambda: id(nice_cover).send_cmd(CMD_OPEN_PARTIAL_2);
+
+  - platform: template
+    name: "Blocare Poarta"
+    icon: "mdi:lock"
+    on_press:
+      then:
+        # Folosim (esphome::bus_t4::T4Command)0x0F pentru a forța valoarea HEX
+        - lambda: 'id(nice_cover).send_it4_cmd(0x0F);'
+        - binary_sensor.template.publish:
+            id: gate_lock_status
+            state: OFF # OFF înseamnă blocat pentru clasa Lock
+
+  - platform: template
+    name: "Deblocare Poarta"
+    icon: "mdi:lock-open"
+    on_press:
+      then:
+        # Folosim (esphome::bus_t4::T4Command)0x10 pentru Deblocare
+        - lambda: 'id(nice_cover).send_it4_cmd(0x10);'
+        - binary_sensor.template.publish:
+            id: gate_lock_status
+            state: ON # ON înseamnă deblocat
+
+  # --- COMBINAȚII: DESCHIDERE + BLOCARE ---
+  - platform: template
+    name: "Deschide si Blocheaza"
+    icon: "mdi:boom-gate-arrow-up"
+    on_press:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x0D);'
+
+  - platform: template
+    name: "Inchide si Blocheaza"
+    icon: "mdi:boom-gate-arrow-down"
+    on_press:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x0E);'
+
+  # --- COMBINAȚII: DEBLOCARE + MIȘCARE ---
+  - platform: template
+    name: "Deblocheaza si Deschide"
+    icon: "mdi:boom-gate-arrow-up-outline"
+    on_press:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x19);'
+
+  - platform: template
+    name: "Deblocheaza si Inchide"
+    icon: "mdi:boom-gate-arrow-down-outline"
+    on_press:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x1A);'
+
+  - platform: restart
+    name: "Restart ESP Poarta"
+    icon: "mdi:restart"
+    
+sensor:
+  - platform: template
+    name: "Procentaj Deschidere Poarta"
+    unit_of_measurement: "%"
+    icon: "mdi:gate"
+    accuracy_decimals: 0
+    lambda: |-
+      if (id(nice_cover).position >= 0.0) {
+        return id(nice_cover).position * 100.0;
+      } else {
+        return NAN;
+      }
+    update_interval: 2s # Va actualiza procentajul o dată la 2 secunde cât timp este online
+
+binary_sensor:
+  - platform: template
+    name: "Stare Blocare Poarta"
+    id: gate_lock_status
+    device_class: lock
+    # Logică HA: OFF = Locked, ON = Unlocked
+
+
+# Folosim un interval pentru a verifica periodic starea raportată în cover
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          // Verificăm dacă poziția este raportată (semn că poarta e online)
+          // și folosim o logică indirectă pentru a deduce blocarea 
+          // sau lăsăm senzorul să fie actualizat de butoane pentru feedback instant
+          if (id(nice_cover).position == 1.0) {
+            // Dacă vrei doar feedback la butoane, poți lăsa lambda gol 
+            // sau poți adăuga logica de mai jos
+          }
+
+
+light:
+  - platform: neopixelbus
+    type: GRB
+    variant: WS2812
+    pin: GPIO4
+    num_leds: 1
+    name: "Status LED"
+    id: status_led_rgb
+    internal: true
+    default_transition_length: 0s
+
+
+
+switch:
+  - platform: template
+    name: "Inchidere Automata (L1)"
+    icon: "mdi:timer-sync"
+    # Aici citim starea din variabila globală, nu din poartă
+    lambda: 'return id(l1_state);'
+    turn_on_action:
+      - lambda: |-
+          id(l1_state) = true;
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x80, 0x01);
+          }
+    turn_off_action:
+      - lambda: |-
+          id(l1_state) = false;
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x80, 0x00);
+          }
+  - platform: template
+    name: "Inchidere dupa Foto (L2)"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x81, 0x01);
+          }
+    turn_off_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x81, 0x00);
+          }
+
+  - platform: template
+    name: "Inchide Mereu (L3)"
+    icon: "mdi:door-closed-lock"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x82, 0x01);
+          }
+    turn_off_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x82, 0x00);
+          }
+
+  - platform: template
+    name: "Mod Standby"
+    icon: "mdi:sleep"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x83, 0x01);
+          }
+    turn_off_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x83, 0x00);
+          }
+
+  - platform: template
+    name: "Mod Peak (Putere maxima)"
+    icon: "mdi:unfold-more-horizontal"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x84, 0x01);
+          }
+    turn_off_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x84, 0x00);
+          }
+
+  - platform: template
+    name: "Pre-Flash"
+    icon: "mdi:car-light-high"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x85, 0x01);
+          }
+    turn_off_action:
+      - lambda: |-
+          if (id(nice_cover).is_ready()) {
+            id(nice_cover).send_config_set(0x85, 0x00);
+          }
+
+number:
+  - platform: template
+    name: "Viteza Deschidere"
+    icon: "mdi:speedometer"
+    min_value: 0
+    max_value: 100
+    step: 10
+    unit_of_measurement: "%"
+    optimistic: true
+    #initial_value: 50
+    restore_value: true
+    set_action:
+      - lambda: |-
+          if (id(system_ready)) {
+            id(nice_cover).send_config_set(0x91, (uint8_t)x);
+          }
+
+  - platform: template
+    name: "Viteza Inchidere"
+    icon: "mdi:speedometer-slow"
+    min_value: 0
+    max_value: 100
+    step: 10
+    unit_of_measurement: "%"
+    optimistic: true
+    #initial_value: 50
+    restore_value: true
+    set_action:
+      - lambda: |-
+          if (id(system_ready)) {
+            id(nice_cover).send_config_set(0x90, (uint8_t)x);
+          }
+  
+  - platform: template
+    name: "Viteza Forta Motor"
+    icon: "mdi:arm-flex"
+    min_value: 0
+    max_value: 100
+    step: 5
+    unit_of_measurement: "%"
+    optimistic: true
+    #initial_value: 50
+    restore_value: true
+    set_action:
+      - lambda: |-
+          if (id(system_ready)) {
+            id(nice_cover).send_config_set(0x92, (uint8_t)x);
+          }
+
+  - platform: template
+    name: "Durata Pauza (Secunde)"
+    icon: "mdi:clock-end"
+    min_value: 0
+    max_value: 250
+    step: 1
+    unit_of_measurement: "s"
+    optimistic: true
+   # initial_value: 30
+    restore_value: true
+    set_action:
+      - lambda: |-
+          if (id(system_ready)) {
+            id(nice_cover).send_config_set(0x88, (uint8_t)x);
+          }
+
+lock:
+  - platform: template
+    name: "Securitate Poarta"
+    optimistic: true
+    lambda: |-
+      if (id(gate_lock_status).state) {
+        return LOCK_STATE_UNLOCKED;
+      } else {
+        return LOCK_STATE_LOCKED;
+      }
+    lock_action:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x0F);'
+      - binary_sensor.template.publish: {id: gate_lock_status, state: false}
+    unlock_action:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x10);'
+      - binary_sensor.template.publish: {id: gate_lock_status, state: true}
