@@ -213,4 +213,11 @@ enum T4Command : uint8_t {
   CMD_OPEN_PARTIAL_1 = 0x05,
   CMD_OPEN_PARTIAL_2 = 0x06,
   CMD_OPEN_PARTIAL_3 = 0x07,
+  // --- Adăugate pentru funcțiile de securitate IT4WIFI ---
+  CMD_BLOCK = 0x0F,
+  CMD_RELEASE = 0x10,
+  CMD_OPEN_AND_BLOCK = 0x0D,
+  CMD_CLOSE_AND_BLOCK = 0x0E,
+  CMD_RELEASE_AND_OPEN = 0x19,
+  CMD_RELEASE_AND_CLOSE = 0x1A,
 };

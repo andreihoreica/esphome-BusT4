@@ -28,13 +28,19 @@ class BusT4Device {
 
   // Send a DEP control command (open/close/stop etc)
   void send_cmd(T4Command cmd);
+  
+  // Send a lock/unlock command mimicking IT4WIFI Device ID (0x02)
+  void send_it4_cmd(T4Command cmd);
+  
+  // Adaugă doar linia de mai jos:
+  void send_it4_cmd(uint8_t cmd_value);
 
   // Send a DMP info request (get status, position, etc)
   void send_info_request(T4Target target, T4InfoCommand command);
 
   // Send a DMP config set (auto-close, etc)
-  void send_config_set(T4InfoCommand param, uint8_t value);
-
+ // void send_config_set(T4InfoCommand param, uint8_t value);
+  void send_config_set(uint8_t param, uint8_t value);
   // Called by BusT4Component when a packet is received
   virtual void on_packet(const T4Packet &packet) {}
 
