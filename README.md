@@ -18,7 +18,7 @@ ESPHome component for integrating **Nice gate and garage door automation** into 
 ## Required Hardware
 
 ### - LilyGO T-CAN485 (XY_32_CAN+RS485) v1.1  (Used for testing)
-### - IBT4N module from Nice with an RJ11 splliter for used in parallel with IT4WIFI module.
+### - IBT4N module from Nice
 ### - Buck Converter DC-DC (Step-Down) from 32-40V to 5V
 ### - Splitter adapter 1 M to 2F RJ11 6P4C
 ### - Cable RJ11 6P4C
@@ -27,6 +27,7 @@ ESPHome component for integrating **Nice gate and garage door automation** into 
 
 Tested with:
 - Nice Robus RBS600
+- connected in parallel with IT4WIFI module
 
 Should work with any Nice controller that has a Bus-T4 port.
 
@@ -47,6 +48,7 @@ Should work with any Nice controller that has a Bus-T4 port.
 
   NOTE: Please make sure you make changes in the next section with your information:
 
+```yaml
 wifi:
   ssid: "wifi_ssid"
   password: "wifi_password"
@@ -57,27 +59,30 @@ wifi:
     static_ip: 192.168.0.13 # Exemplu
     gateway: 192.168.0.1 #conform setarilor retelei
     subnet: 255.255.255.0 #conform setarilor retelei
+```
 
 #### Step 4: Making wiring connections to Nice motor
 
-## A. identify the pins from BusT4
+  A. identify the pins from BusT4
 
 <img width="989" height="454" alt="image" src="https://github.com/user-attachments/assets/8007d6f7-58a2-4da9-9ce2-adbacced4d0a" />
+
 
 Pin RJ11	Nice BusT4	- Please test with an multimeter for 24V to identify the corect wiring. 
 
 Usually there are like below:
-  Pin 1	Black	Terminal GND
-  Pin 3	Red	Terminal A	
-  Pin 4	Green	Terminal B
-  Pin 1	Yellow	Terminal +24V	
-I've used an RJ11 6P4C cable cut in two and an splitter adapter 1 M to 2F RJ11 6P4C for connecting in parallel with Nice IT4WIFI.
+  - Pin 1	Black	Terminal GND
+  - Pin 3	Red	Terminal A	
+  - Pin 4	Green	Terminal B
+  - Pin 1	Yellow	Terminal +24V	
+  
+ I've used an RJ11 6P4C cable cut in two and an splitter adapter 1 M to 2F RJ11 6P4C for connecting in parallel with Nice IT4WIFI.
 
-## B. Connect the GND and +24V pins to the Buck Converter and set 5V for Output.
+  B. Connect the GND and +24V pins to the Buck Converter and set 5V for Output.
 
-## C. Make connection to the Canbus: GND on the middle and Red/Green on the left/right. If the gate is unresponsive you can try changing the Red and Green wires in the canbus connector.
+  C. Make connection to the Canbus: GND on the middle and Red/Green on the left/right. If the gate is unresponsive you can try changing the Red and Green wires in the canbus connector.
 
-## D. Attach the antenna to LilyGo board and all the setup should be recognised by the motor. If not, press and hold for a few secconds the Open+Stop Buttons from the motor till L1 and L2 start flashing.
+  D. Attach the antenna to LilyGo board and all the setup should be recognised by the motor. If not, press and hold for a few secconds the Open+Stop Buttons from the motor till L1 and L2 start flashing.
 
 I've made my setup like in the photos below:
 
