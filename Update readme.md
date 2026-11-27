@@ -75,6 +75,9 @@ cover.h / cover.cpp / __init__.py
 - FIX the periodic I/O response can no longer overwrite position/state while the gate is
   moving (limit-switch confirmation only when idle or when confirmation was requested).
 - The value cache (config_cache_) was extended to 256 registers (initialised in setup()).
+- NEW (27.11) optional text_sensor "io_raw": the full 0xD1 response (14 bytes, hex) published to HA on
+  every change so it is kept in history ("INF_IO brut" entity); the "INF_IO changed" log now shows the
+  whole payload, not just 5 bytes.
 
 
 4. CHANGES IN nice.yaml
@@ -93,7 +96,7 @@ cover.h / cover.cpp / __init__.py
     Opening / Closing Slow-down Speed (%)    → 0x45 / 0x46 (10–100)
     Opening / Closing Force (%)              → 0x4A / 0x4B (10–100)
 - Diagnostic sensor "L3 Mode (raw value 0x8A)" (read-only).
-- binary_sensor "Gate Photocell" (in cover: photocell).
+- binary_sensor "Gate Photocell" (in cover: photocell) and text_sensor "INF_IO brut" (in cover: io_raw).
 - Diagnostic button "Read control unit parameters" (logs all registers above + I/O).
 - Automatic parameter re-read: ~15 s after boot and every 60 s (interval).
 - REMOVED: "Peak Mode (Max power)" switch, the old "Opening/Closing Speed/Motor Force"
@@ -118,7 +121,12 @@ cover.h / cover.cpp / __init__.py
 6. TEST STATUS
 --------------
 - Parameter read/write: TESTED on ROBUSR10 (all registers in section 2).
-- Photocell: NOT TESTED. The 0xD1 response with the gate closed is constant
+- Photocell: TEST FAILED with the bidiwifi mapping (27.11, car passed with the gate fully open, sensor stayed
+  off). The correct bit is being searched for with "INF_IO brut".
+- Photocell: IDENTIFIED (27.11 evening). On a Robus with PHW photocells via IBW (BlueBUS), 0xD1 response
+  byte 4 = 0x04 opening, 0x01 closing, 0x08 photocells powered and clear; bit 0x08 drops to 0 while the
+  beam is interrupted. New option photocell_active_low: true (photocell_byte: 4, photocell_mask: 0x08);
+  the state is only valid with the gate open or closing (with the gate closed, standby powers BlueBUS down). The 0xD1 response with the gate closed is constant
   (01 00 40 00 00 04 00 00 00 04 00 02 01 00). The photocell bit on Robus still has to be
   identified with the gate open (standby cuts power to the photocells when idle).
 - Meaning of the 0x8A value (L3 mode = 32) – not confirmed.
@@ -133,6 +141,7 @@ slow-down on the correct registers, L3 wait time, generic parameter read, diagno
 and a photocell sensor (experimental). Removed: "Peak mode" and the old speed/force numbers.
 WARNING: after updating, check L2, pause time and force in HA – the old values may have been
 altered by the wrong map.
+
 
 ==================================================================================
 ==================================================================================
@@ -212,6 +221,9 @@ cover.h / cover.cpp / __init__.py
 - FIX răspunsul I/O periodic nu mai poate suprascrie poziția/starea cât poarta e în mișcare
   (confirmarea prin capete de cursă doar în repaus sau la confirmare cerută).
 - Memoria de valori (config_cache_) a fost extinsă la 256 de registre (inițializată în setup()).
+- NOU (27.11) text_sensor opțional „io_raw”: răspunsul complet 0xD1 (14 octeți, hex) publicat în HA la
+  fiecare schimbare, ca să rămână în istoric (entitatea „INF_IO brut”); logul „INF_IO changed” arată acum
+  tot payload-ul, nu doar 5 octeți.
 
 
 4. MODIFICĂRI ÎN nice.yaml
@@ -230,7 +242,7 @@ cover.h / cover.cpp / __init__.py
     Viteză Încetinire Deschidere / Închidere → 0x45 / 0x46 (10–100)
     Forță Deschidere / Închidere (%)         → 0x4A / 0x4B (10–100)
 - Senzor diagnostic „L3 Mod (valoare brută 0x8A)” (doar citire).
-- binary_sensor „Fotocelulă Poartă” (în cover: photocell).
+- binary_sensor „Fotocelulă Poartă” (în cover: photocell) și text_sensor „INF_IO brut” (în cover: io_raw).
 - Buton diagnostic „Citește parametri centrală” (loghează toate registrele de mai sus + I/O).
 - Recitire automată a parametrilor: la ~15 s după pornire și la fiecare 60 s (interval).
 - ELIMINAT: switch „Mod Peak (Putere maximă)”, numerele vechi „Viteză Deschidere/Închidere/
@@ -255,7 +267,12 @@ cover.h / cover.cpp / __init__.py
 6. STATUS TESTARE
 -----------------
 - Citire/scriere parametri: TESTAT pe ROBUSR10 (toate registrele din secțiunea 2).
-- Fotocelulă: NETESTAT. Răspunsul 0xD1 cu poarta închisă e constant
+- Fotocelulă: TEST EȘUAT cu maparea bidiwifi (27.11, trecere cu poarta deschisă, senzorul a rămas off).
+  Bitul corect se caută cu „INF_IO brut”.
+- Fotocelulă: IDENTIFICATĂ (27.11 seara). Pe Robus cu fotocelule PHW prin IBW (BlueBUS), răspunsul 0xD1
+  octetul 4 = 0x04 deschidere, 0x01 închidere, 0x08 fotocelule alimentate și libere; bitul 0x08 cade la 0
+  cât fasciculul e întrerupt. Opțiune nouă photocell_active_low: true (photocell_byte: 4, photocell_mask: 0x08);
+  starea e validă doar cu poarta deschisă sau în închidere (cu poarta închisă, standby oprește BlueBUS). Răspunsul 0xD1 cu poarta închisă e constant
   (01 00 40 00 00 04 00 00 00 04 00 02 01 00). Bitul fotocelulei pe Robus urmează să fie
   identificat cu poarta deschisă (standby oprește alimentarea fotocelulelor în repaus).
 - Semnificația valorii 0x8A (L3 mod = 32) – neconfirmată.
