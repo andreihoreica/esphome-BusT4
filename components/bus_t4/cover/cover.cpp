@@ -5,10 +5,30 @@
 #include <string>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cinttypes>
+#include <vector>
 
 namespace esphome::bus_t4 {
 
 static const char *TAG = "bus_t4.cover";
+
+// Compat ESPHome 2026.11+: format_hex_pretty() care returna std::string a fost eliminat din core.
+// Helper local, folosit doar pentru log-uri.
+static std::string format_hex_pretty(const uint8_t *data, size_t len) {
+  std::string out;
+  out.reserve(len * 3);
+  char buf[4];
+  for (size_t i = 0; i < len; i++) {
+    snprintf(buf, sizeof(buf), i ? ".%02X" : "%02X", data[i]);
+    out += buf;
+  }
+  return out;
+}
+static inline std::string format_hex_pretty(const std::vector<uint8_t> &v) {
+  return format_hex_pretty(v.data(), v.size());
+}
 
 cover::CoverTraits BusT4Cover::get_traits() {
   auto traits = cover::CoverTraits();
@@ -21,6 +41,7 @@ cover::CoverTraits BusT4Cover::get_traits() {
 }
 
 void BusT4Cover::setup() {
+  for (auto &v : config_cache_) v = -1;
   // Initialize with unknown position
   this->position = cover::COVER_OPEN;
   this->current_operation = cover::COVER_OPERATION_IDLE;
@@ -57,6 +78,27 @@ void BusT4Cover::loop() {
         request_position();
       }
     }
+  }
+
+  // Periodic I/O polling (photocell) - only if a photocell sensor is configured
+  if (init_ok_ && photocell_sensor_ != nullptr) {
+    bool moving = current_operation != cover::COVER_OPERATION_IDLE;
+    bool closed = this->position <= CLOSED_POSITION_THRESHOLD;
+    uint32_t interval = closed ? io_poll_interval_closed_ : io_poll_interval_;
+    bool allowed = !moving || io_poll_while_moving_ || !is_robus_;
+    if (allowed && (now - last_io_poll_ >= interval)) {
+      last_io_poll_ = now;
+      send_info_request(FOR_CU, INF_IO);
+    }
+  }
+
+  // Periodic readback of L1/L2 from the control unit (only when idle)
+  if (init_ok_ && (auto_close_state_sensor_ != nullptr || photo_close_state_sensor_ != nullptr) &&
+      current_operation == cover::COVER_OPERATION_IDLE &&
+      (last_config_readback_ == 0 || now - last_config_readback_ >= config_readback_interval_)) {
+    last_config_readback_ = now;
+    if (auto_close_state_sensor_ != nullptr) request_config(auto_close_register_);
+    if (photo_close_state_sensor_ != nullptr) request_config(photo_close_register_);
   }
 
   // Time-based position tracking during movement
@@ -617,8 +659,33 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
                packet.data[DATA_OFFSET + 2], packet.data[DATA_OFFSET + 3],
                packet.data[DATA_OFFSET + 4]);
 
+      // Log the payload at INFO whenever it changes (for photocell bit identification)
+      {
+        bool changed = !io_payload_seen_;
+        for (uint8_t i = 0; i < 5; i++) {
+          if (packet.size > DATA_OFFSET + i && packet.data[DATA_OFFSET + i] != last_io_payload_[i]) changed = true;
+        }
+        if (changed) {
+          ESP_LOGI(TAG, "INF_IO changed: %02X %02X %02X %02X %02X (size=%d)",
+                   packet.data[DATA_OFFSET], packet.data[DATA_OFFSET + 1], packet.data[DATA_OFFSET + 2],
+                   packet.data[DATA_OFFSET + 3], packet.data[DATA_OFFSET + 4], packet.size);
+          for (uint8_t i = 0; i < 5; i++) {
+            if (packet.size > DATA_OFFSET + i) last_io_payload_[i] = packet.data[DATA_OFFSET + i];
+          }
+          io_payload_seen_ = true;
+        }
+      }
+
+      // Photocell (configurable byte/mask, default = bidiwifi mapping: payload+2, bit 0x04)
+      if (photocell_sensor_ != nullptr && packet.size > DATA_OFFSET + photocell_byte_) {
+        bool photo = (packet.data[DATA_OFFSET + photocell_byte_] & photocell_mask_) != 0;
+        photocell_sensor_->publish_state(photo);
+      }
+
       // Check if we have enough data for the limit switch byte
-      if (packet.size > IO_LIMIT_OFFSET) {
+      // Periodic polling must not override state mid-movement: only confirm when idle or asked.
+      if (packet.size > IO_LIMIT_OFFSET &&
+          (awaiting_confirmation_ || current_operation == cover::COVER_OPERATION_IDLE)) {
         uint8_t limit_state = packet.data[IO_LIMIT_OFFSET];
 
         switch (limit_state) {
@@ -650,7 +717,7 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
             ESP_LOGD(TAG, "INF_IO: Unknown limit state 0x%02X", limit_state);
             break;
         }
-      } else {
+      } else if (packet.size <= IO_LIMIT_OFFSET) {
         ESP_LOGW(TAG, "INF_IO packet too short for limit switch data");
       }
       break;
@@ -732,6 +799,25 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
       }
       break;
     }
+
+    default: {
+      // Parametri (orice registru GET neinterpretat mai sus): cache + log + senzori L1/L2 optionali
+      if (packet.size > DATA_OFFSET) {
+        uint8_t value = packet.data[DATA_OFFSET];
+        int16_t prev = config_cache_[command];
+        config_cache_[command] = value;
+        if (prev != value) {
+          ESP_LOGI(TAG, "Config 0x%02X = %u (0x%02X)", command, value, value);
+        } else {
+          ESP_LOGD(TAG, "Config 0x%02X = %u (unchanged)", command, value);
+        }
+        if (command == auto_close_register_ && auto_close_state_sensor_ != nullptr)
+          auto_close_state_sensor_->publish_state(value != 0);
+        if (command == photo_close_register_ && photo_close_state_sensor_ != nullptr)
+          photo_close_state_sensor_->publish_state(value != 0);
+      }
+      break;
+    }
   }
 }
 
@@ -770,7 +856,7 @@ void BusT4Cover::parse_oxi_packet(const T4Packet &packet) {
     uint8_t remote_mode = payload[7] + 1;
     uint8_t press_count = payload[6];
 
-    ESP_LOGI(TAG, "Remote: serial=%08X, cmd=%d, btn=%d, mode=%d, presses=%d",
+    ESP_LOGI(TAG, "Remote: serial=%08" PRIX32 ", cmd=%d, btn=%d, mode=%d, presses=%d",
              remote_serial, remote_command, remote_button, remote_mode, press_count);
   }
 
@@ -780,7 +866,7 @@ void BusT4Cover::parse_oxi_packet(const T4Packet &packet) {
     uint8_t button = payload[0] >> 4;  // High nibble
     uint32_t remote_serial = (payload[0] & 0x0F) | (payload[1] << 4) | (payload[2] << 12) | (payload[3] << 20);
 
-    ESP_LOGI(TAG, "Button press: btn=%d, remote=%05X", button, remote_serial);
+    ESP_LOGI(TAG, "Button press: btn=%d, remote=%05" PRIX32, button, remote_serial);
   }
 }
 
@@ -902,6 +988,16 @@ void BusT4Cover::request_status_confirmation() {
   // Request both - I/O for limit switches (if supported), status as fallback
   send_info_request(FOR_CU, INF_IO);
   send_info_request(FOR_CU, INF_STATUS);
+}
+
+void BusT4Cover::request_io_state() {
+  if (parent_ == nullptr || !init_ok_) return;
+  send_info_request(FOR_CU, INF_IO);
+}
+
+void BusT4Cover::request_config(uint8_t reg) {
+  if (parent_ == nullptr || !init_ok_) return;
+  send_info_request(FOR_CU, static_cast<T4InfoCommand>(reg));
 }
 
 void BusT4Cover::update_position(uint16_t encoder_pos) {

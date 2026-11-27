@@ -2,6 +2,7 @@
 
 #include "esphome/components/cover/cover.h"
 #include "esphome/core/preferences.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "../bus_t4.h"
 #include <string>
 
@@ -53,6 +54,27 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   void set_close_duration(uint32_t duration) { close_duration_ = duration; }
   void set_auto_learn_timing(bool enable) { auto_learn_timing_ = enable; }
   void set_position_report_interval(uint32_t interval) { position_report_interval_ = interval; }
+
+  // --- I/O diagnostic (INF_IO 0xD1): photocell / limit switches ---
+  void set_photocell_sensor(binary_sensor::BinarySensor *s) { photocell_sensor_ = s; }
+  void set_photocell_byte(uint8_t b) { photocell_byte_ = b; }
+  void set_photocell_mask(uint8_t m) { photocell_mask_ = m; }
+  void set_io_poll_interval(uint32_t ms) { io_poll_interval_ = ms; }
+  void set_io_poll_interval_closed(uint32_t ms) { io_poll_interval_closed_ = ms; }
+  void set_io_poll_while_moving(bool v) { io_poll_while_moving_ = v; }
+  // Cerere manuala I/O (apelabila din lambda)
+  void request_io_state();
+
+  // --- Citire parametri reali din centrala (GET pe registre 0x80-0x9F) ---
+  void set_auto_close_state_sensor(binary_sensor::BinarySensor *s) { auto_close_state_sensor_ = s; }
+  void set_photo_close_state_sensor(binary_sensor::BinarySensor *s) { photo_close_state_sensor_ = s; }
+  void set_auto_close_register(uint8_t r) { auto_close_register_ = r; }
+  void set_photo_close_register(uint8_t r) { photo_close_register_ = r; }
+  void set_config_readback_interval(uint32_t ms) { config_readback_interval_ = ms; }
+  // Cere valoarea unui registru de configurare; raspunsul apare in log ("Config 0x.. = ..")
+  void request_config(uint8_t reg);
+  // Ultima valoare citita pentru registru (orice registru 0x00-0xFF), -1 daca nu e cunoscuta
+  int16_t get_config_value(uint8_t reg) const { return config_cache_[reg]; }
 
   // Motor controller configuration (runtime)
   // These send commands to the motor controller to change its settings
@@ -162,6 +184,26 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   void request_status_confirmation();
   bool awaiting_confirmation_{false};
   cover::CoverOperation last_operation_{cover::COVER_OPERATION_IDLE};
+
+  // I/O diagnostic
+  binary_sensor::BinarySensor *photocell_sensor_{nullptr};
+  uint8_t photocell_byte_{2};      // offset fata de inceputul payload-ului (DATA_OFFSET)
+  uint8_t photocell_mask_{0x04};
+  uint32_t io_poll_interval_{1000};          // cat poarta nu e inchisa
+  uint32_t io_poll_interval_closed_{10000};  // cat poarta e inchisa
+  bool io_poll_while_moving_{false};         // Robus: implicit fara interogari in miscare
+  uint32_t last_io_poll_{0};
+  uint8_t last_io_payload_[5]{0, 0, 0, 0, 0};
+  bool io_payload_seen_{false};
+
+  // Config readback
+  binary_sensor::BinarySensor *auto_close_state_sensor_{nullptr};
+  binary_sensor::BinarySensor *photo_close_state_sensor_{nullptr};
+  uint8_t auto_close_register_{0x80};
+  uint8_t photo_close_register_{0x84};
+  uint32_t config_readback_interval_{60000};
+  uint32_t last_config_readback_{0};
+  int16_t config_cache_[256];  // initializat cu -1 in setup()
 };
 
 } // namespace esphome::bus_t4
