@@ -3,6 +3,7 @@
 #include "esphome/components/cover/cover.h"
 #include "esphome/core/preferences.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "../bus_t4.h"
 #include <string>
 
@@ -57,8 +58,13 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
 
   // --- I/O diagnostic (INF_IO 0xD1): photocell / limit switches ---
   void set_photocell_sensor(binary_sensor::BinarySensor *s) { photocell_sensor_ = s; }
+  // Raspunsul complet INF_IO (0xD1) ca text hex, publicat la fiecare schimbare (diagnoza)
+  void set_io_raw_sensor(text_sensor::TextSensor *s) { io_raw_sensor_ = s; }
   void set_photocell_byte(uint8_t b) { photocell_byte_ = b; }
   void set_photocell_mask(uint8_t m) { photocell_mask_ = m; }
+  // Robus + BlueBUS (ex. PHW prin IBW): bitul e 1 = fascicul liber, si e valid doar cu poarta
+  // oprita deschisa sau in inchidere (cu poarta inchisa, standby opreste BlueBUS -> bit 0).
+  void set_photocell_active_low(bool v) { photocell_active_low_ = v; }
   void set_io_poll_interval(uint32_t ms) { io_poll_interval_ = ms; }
   void set_io_poll_interval_closed(uint32_t ms) { io_poll_interval_closed_ = ms; }
   void set_io_poll_while_moving(bool v) { io_poll_while_moving_ = v; }
@@ -189,11 +195,14 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   binary_sensor::BinarySensor *photocell_sensor_{nullptr};
   uint8_t photocell_byte_{2};      // offset fata de inceputul payload-ului (DATA_OFFSET)
   uint8_t photocell_mask_{0x04};
+  bool photocell_active_low_{false};
   uint32_t io_poll_interval_{1000};          // cat poarta nu e inchisa
   uint32_t io_poll_interval_closed_{10000};  // cat poarta e inchisa
   bool io_poll_while_moving_{false};         // Robus: implicit fara interogari in miscare
   uint32_t last_io_poll_{0};
-  uint8_t last_io_payload_[5]{0, 0, 0, 0, 0};
+  text_sensor::TextSensor *io_raw_sensor_{nullptr};
+  uint8_t last_io_payload_[32]{};
+  uint8_t last_io_len_{0};
   bool io_payload_seen_{false};
 
   // Config readback

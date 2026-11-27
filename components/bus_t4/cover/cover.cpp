@@ -81,7 +81,7 @@ void BusT4Cover::loop() {
   }
 
   // Periodic I/O polling (photocell) - only if a photocell sensor is configured
-  if (init_ok_ && photocell_sensor_ != nullptr) {
+  if (init_ok_ && (photocell_sensor_ != nullptr || io_raw_sensor_ != nullptr)) {
     bool moving = current_operation != cover::COVER_OPERATION_IDLE;
     bool closed = this->position <= CLOSED_POSITION_THRESHOLD;
     uint32_t interval = closed ? io_poll_interval_closed_ : io_poll_interval_;
@@ -659,26 +659,39 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
                packet.data[DATA_OFFSET + 2], packet.data[DATA_OFFSET + 3],
                packet.data[DATA_OFFSET + 4]);
 
-      // Log the payload at INFO whenever it changes (for photocell bit identification)
+      // Log + publish the full payload whenever it changes (for photocell bit identification)
       {
-        bool changed = !io_payload_seen_;
-        for (uint8_t i = 0; i < 5; i++) {
-          if (packet.size > DATA_OFFSET + i && packet.data[DATA_OFFSET + i] != last_io_payload_[i]) changed = true;
+        int plen = (int) packet.size - (int) DATA_OFFSET - 1;  // fara checksum
+        if (plen < 0) plen = 0;
+        if (plen > 32) plen = 32;
+        bool changed = !io_payload_seen_ || plen != last_io_len_;
+        for (int i = 0; i < plen && !changed; i++) {
+          if (packet.data[DATA_OFFSET + i] != last_io_payload_[i]) changed = true;
         }
         if (changed) {
-          ESP_LOGI(TAG, "INF_IO changed: %02X %02X %02X %02X %02X (size=%d)",
-                   packet.data[DATA_OFFSET], packet.data[DATA_OFFSET + 1], packet.data[DATA_OFFSET + 2],
-                   packet.data[DATA_OFFSET + 3], packet.data[DATA_OFFSET + 4], packet.size);
-          for (uint8_t i = 0; i < 5; i++) {
-            if (packet.size > DATA_OFFSET + i) last_io_payload_[i] = packet.data[DATA_OFFSET + i];
-          }
+          std::string hex = format_hex_pretty(&packet.data[DATA_OFFSET], (size_t) plen);
+          ESP_LOGI(TAG, "INF_IO changed: %s (len=%d)", hex.c_str(), plen);
+          for (int i = 0; i < plen; i++) last_io_payload_[i] = packet.data[DATA_OFFSET + i];
+          last_io_len_ = (uint8_t) plen;
           io_payload_seen_ = true;
+          if (io_raw_sensor_ != nullptr) io_raw_sensor_->publish_state(hex);
         }
       }
 
       // Photocell (configurable byte/mask, default = bidiwifi mapping: payload+2, bit 0x04)
       if (photocell_sensor_ != nullptr && packet.size > DATA_OFFSET + photocell_byte_) {
-        bool photo = (packet.data[DATA_OFFSET + photocell_byte_] & photocell_mask_) != 0;
+        uint8_t pb = packet.data[DATA_OFFSET + photocell_byte_];
+        bool photo = (pb & photocell_mask_) != 0;
+        if (photocell_active_low_) {
+          // Robus (verificat 27.11 cu PHW/IBW): octetul 4 = 0x04 deschidere, 0x01 inchidere,
+          // 0x08 = fotocelule alimentate si libere. Cu poarta inchisa (standby) sau in deschidere
+          // bitul lipseste fara sa insemne obstacol, deci starea e valida doar daca poarta nu e
+          // inchisa si nu se deschide.
+          bool valid = this->position > 0.02f &&
+                       this->current_operation != cover::COVER_OPERATION_OPENING &&
+                       (pb & 0x04) == 0;
+          photo = valid && !photo;
+        }
         photocell_sensor_->publish_state(photo);
       }
 
