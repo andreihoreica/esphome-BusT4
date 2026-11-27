@@ -26,8 +26,9 @@ ESPHome component for integrating **Nice gate and garage door automation** into 
 **⚠️ Please be carefull to use an Buck Converter DC-DC (Step-Down) because the LilyGO board needs 5V and the gate offers 24v.⚠️
 
 Tested with:
-- Nice Robus RBS600
+- Nice Robus RBS600 with photocell Nice PHW
 - connected in parallel with IT4WIFI module
+  
 
 Should work with any Nice controller that has a Bus-T4 port.
 
