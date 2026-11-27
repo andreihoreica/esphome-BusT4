@@ -56,11 +56,16 @@ wifi:
   networks:
     - ssid: !secret wifi_ssid
       password: !secret wifi_password
+      # bssid: "66:15:6F:A6:26:D4"
+  # bssid: "66:15:6F:A6:26:D4"
+  # MODIFICAT: fast_connect false -> placa scanează și alege cel mai bun AP (EAP225),
+  # nu primul care răspunde la SSID
   fast_connect: false
   power_save_mode: NONE
   # NOU: reduce vârfurile de curent la TX (util dacă placa face brownout)
   output_power: 20dB # crescut de la 15dB la 20db
-  
+  # OPȚIONAL: fixează placa pe EAP225 (BSSID-ul 2.4 GHz din Omada), decomentează dacă sare între AP-uri
+  # bssid: "66:15:6F:A6:26:D4"
   manual_ip:
     static_ip: 192.168.0.13
     gateway: 192.168.0.1
@@ -100,6 +105,8 @@ api:
 ota:
   - platform: esphome
 
+# ELIMINAT: web_server (consuma RAM/CPU inutil)
+
 logger:
   level: DEBUG
   baud_rate: 115200
@@ -120,10 +127,18 @@ cover:
     open_duration: 20s            # Initial/fallback open time
     close_duration: 20s           # Initial/fallback close time
     position_report_interval: 1s  # Position update rate
-    # NOU: fotocelula din registrul de diagnoza I/O al centralei (0xD1, bitul 0x04)
-    # Daca starea iese inversata, adauga sub photocell:  filters: [invert]
+    # Fotocelula din registrul de diagnoza I/O al centralei (0xD1), identificata 27.11:
+    # octetul 4, bitul 0x08 = fascicul liber (PHW prin IBW pe BlueBUS). ON = obstacol.
+    # Valid doar cu poarta deschisa / in inchidere; cu poarta inchisa raporteaza mereu OFF.
+    photocell_byte: 4
+    photocell_mask: 0x08
+    photocell_active_low: true
     photocell:
       name: "Fotocelula Poarta"
+    # NOU: raspunsul complet al registrului I/O (0xD1), salvat in istoricul HA la fiecare schimbare
+    # (pentru identificarea bitului fotocelulei pe Robus)
+    io_raw:
+      name: "INF_IO brut"
 
 globals:
   - id: system_ready
@@ -285,6 +300,19 @@ binary_sensor:
   - platform: status
     name: "Status conexiune HA"
 
+# ELIMINAT: blocul interval: 1s (lambda-ul nu făcea nimic)
+
+#light:
+#  - platform: neopixelbus
+ #   type: GRB
+  #  variant: WS2812
+  #  pin: GPIO4
+  #  num_leds: 1
+  #  name: "Status LED"
+  #  id: status_led_rgb
+  #  internal: true
+  #  default_transition_length: 0s
+
 light:
   - platform: esp32_rmt_led_strip
     chipset: WS2812
@@ -381,6 +409,9 @@ switch:
       - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x94, 0x00);'
       - delay: 700ms
       - lambda: 'id(nice_cover).request_config(0x94);'
+
+  # ELIMINAT: "Mod Peak (Putere maxima)" - registrul nu exista pe Robus (0x93 = eroare),
+  # iar vechiul 0x84 era de fapt L2.
 
 number:
   - platform: template
