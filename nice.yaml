@@ -1,0 +1,593 @@
+esphome:
+  name: nice-gate
+  on_boot:
+    - priority: 800
+      then:
+        # Pinul 23 trebuie să fie LOW pentru a scoate cipul CAN din Standby
+        - output.turn_off: can_se_pin
+    - priority: 100
+      then:
+        - light.turn_on:
+            id: status_led_rgb
+            brightness: 100%
+            red: 0%
+            green: 0%
+            blue: 100%
+    - priority: -100
+      then:
+        - delay: 10s # Așteptăm 10 secunde să se calmeze toate componentele
+        - lambda: 'id(system_ready) = true;'
+        - lambda: |-
+            // La (re)pornire, restaurăm starea reală de blocare din memoria persistentă,
+            // în loc să rămânem pe valoarea implicită (OFF = blocat) a senzorului template.
+            id(gate_lock_status).publish_state(id(gate_is_unlocked));
+        - logger.log: ">>> SISTEMUL ESTE GATA, COMENZILE SUNT DEBLOCATE <<<"
+        - delay: 5s
+        - lambda: |-
+            // Prima citire a parametrilor reali din centrala (fara nicio scriere)
+            for (uint8_t reg : {0x42, 0x43, 0x45, 0x46, 0x4A, 0x4B, 0x80, 0x81, 0x84, 0x85, 0x88, 0x89, 0x8A, 0x8C, 0x94}) {
+              id(nice_cover).request_config(reg);
+            }
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+output:
+  - platform: gpio
+    pin: 23
+    id: can_se_pin
+
+uart:
+  id: uart_bus
+  # Pinii dedicați transceiver-ului CAN pe placa LilyGo T-CAN485
+  tx_pin: 27
+  rx_pin: 26
+  baud_rate: 19200
+  rx_buffer_size: 512
+
+external_components:
+  - source:
+      type: local
+      path: my_components
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      # bssid: "66:15:6F:A6:26:D4"
+  # bssid: "66:15:6F:A6:26:D4"
+  # MODIFICAT: fast_connect false -> placa scanează și alege cel mai bun AP (EAP225),
+  # nu primul care răspunde la SSID
+  fast_connect: false
+  power_save_mode: NONE
+  # NOU: reduce vârfurile de curent la TX (util dacă placa face brownout)
+  output_power: 20dB # crescut de la 15dB la 20db
+  # OPȚIONAL: fixează placa pe EAP225 (BSSID-ul 2.4 GHz din Omada), decomentează dacă sare între AP-uri
+  # bssid: "66:15:6F:A6:26:D4"
+  manual_ip:
+    static_ip: 192.168.0.13
+    gateway: 192.168.0.1
+    subnet: 255.255.255.0
+    dns1: 192.168.0.1
+    dns2: 8.8.8.8
+  on_connect:
+    - light.turn_on:
+        id: status_led_rgb
+        red: 100%
+        green: 80%
+        blue: 0% # GALBEN: Wi-Fi OK
+  on_disconnect:
+    - light.turn_on:
+        id: status_led_rgb
+        red: 100%
+        green: 0%
+        blue: 0% # ROȘU: Wi-Fi Picat
+
+api:
+  reboot_timeout: 3min
+  on_client_connected:
+    - light.turn_on:
+        id: status_led_rgb
+        red: 0%
+        green: 100%
+        blue: 0% # VERDE: Totul OK
+  on_client_disconnected:
+    - light.turn_on:
+        id: status_led_rgb
+        red: 100%
+        green: 80%
+        blue: 0% # GALBEN: A picat doar conexiunea cu HA
+  encryption:
+    key: !secret nice_gate__encryption_key
+
+ota:
+  - platform: esphome
+
+# ELIMINAT: web_server (consuma RAM/CPU inutil)
+
+logger:
+  level: DEBUG
+  baud_rate: 115200
+
+# NOU: diagnoză – vezi dacă placa se repornește sau doar pierde Wi-Fi
+debug:
+  update_interval: 30s
+
+bus_t4:
+  uart_id: uart_bus
+  address: 0x55
+
+cover:
+  - platform: bus_t4
+    name: "Poarta Nice"
+    id: nice_cover
+    auto_learn_timing: true       # Auto-learn open/close duration
+    open_duration: 20s            # Initial/fallback open time
+    close_duration: 20s           # Initial/fallback close time
+    position_report_interval: 1s  # Position update rate
+    # NOU: fotocelula din registrul de diagnoza I/O al centralei (0xD1, bitul 0x04)
+    # Daca starea iese inversata, adauga sub photocell:  filters: [invert]
+    photocell:
+      name: "Fotocelula Poarta"
+
+globals:
+  - id: system_ready
+    type: bool
+    initial_value: 'false'
+  - id: gate_is_unlocked
+    type: bool
+    restore_value: yes # Persistă starea de (de)blocare peste reboot-uri ESP
+    initial_value: 'false' # doar la prima flashare; ulterior se restaurează ultima valoare reală
+
+button:
+  - platform: template
+    name: "Nice Open"
+    on_press:
+      - cover.open: nice_cover
+  - platform: template
+    name: "Nice Close"
+    on_press:
+      - cover.close: nice_cover
+
+  - platform: template
+    name: "Partial Open 1"
+    icon: "mdi:gate-arrow-right"
+    on_press:
+      - lambda: id(nice_cover).send_cmd(CMD_OPEN_PARTIAL_1);
+
+  - platform: template
+    name: "Partial Open 2"
+    icon: "mdi:gate-arrow-right"
+    on_press:
+      - lambda: id(nice_cover).send_cmd(CMD_OPEN_PARTIAL_2);
+
+  - platform: template
+    name: "Blocare Poarta"
+    icon: "mdi:lock"
+    on_press:
+      then:
+        - lambda: |-
+            id(nice_cover).send_it4_cmd(0x0F);
+            id(gate_is_unlocked) = false; // persistă peste reboot
+            id(gate_lock_status).publish_state(false); // OFF înseamnă blocat pentru clasa Lock
+
+  - platform: template
+    name: "Deblocare Poarta"
+    icon: "mdi:lock-open"
+    on_press:
+      then:
+        - lambda: |-
+            id(nice_cover).send_it4_cmd(0x10);
+            id(gate_is_unlocked) = true; // persistă peste reboot
+            id(gate_lock_status).publish_state(true); // ON înseamnă deblocat
+
+  # --- COMBINAȚII: DESCHIDERE + BLOCARE ---
+  - platform: template
+    name: "Deschide si Blocheaza"
+    icon: "mdi:boom-gate-arrow-up"
+    on_press:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x0D);'
+
+  - platform: template
+    name: "Inchide si Blocheaza"
+    icon: "mdi:boom-gate-arrow-down"
+    on_press:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x0E);'
+
+  # --- COMBINAȚII: DEBLOCARE + MIȘCARE ---
+  - platform: template
+    name: "Deblocheaza si Deschide"
+    icon: "mdi:boom-gate-arrow-up-outline"
+    on_press:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x19);'
+
+  - platform: template
+    name: "Deblocheaza si Inchide"
+    icon: "mdi:boom-gate-arrow-down-outline"
+    on_press:
+      - lambda: 'id(nice_cover).send_it4_cmd(0x1A);'
+
+  - platform: restart
+    name: "Restart ESP Poarta"
+    icon: "mdi:restart"
+
+  # NOU: diagnoza - scrie in log valorile reale ale registrelor centralei ("Config 0x.. = ..")
+  - platform: template
+    name: "Citeste parametri centrala"
+    icon: "mdi:database-search"
+    entity_category: diagnostic
+    on_press:
+      - lambda: |-
+          for (uint8_t reg : {0x42, 0x43, 0x45, 0x46, 0x4A, 0x4B, 0x80, 0x81, 0x84, 0x85, 0x88, 0x89, 0x8A, 0x8C, 0x94}) {
+            id(nice_cover).request_config(reg);
+          }
+          id(nice_cover).request_io_state();
+
+sensor:
+  - platform: template
+    name: "Procentaj Deschidere Poarta"
+    unit_of_measurement: "%"
+    icon: "mdi:gate"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      // Ține minte ultima poziție trimisă
+      static float last_sent_pos = -100.0;
+
+      if (id(nice_cover).is_ready() && !isnan(id(nice_cover).position)) {
+        float current_pos = id(nice_cover).position * 100.0;
+
+        // Trimite doar dacă diferența e >= 1%
+        if (abs(current_pos - last_sent_pos) >= 1.0) {
+          last_sent_pos = current_pos;
+          return current_pos;
+        }
+      }
+      return {}; // Nu trimite nimic dacă nu s-a schimbat sau nu e gata
+
+  - platform: template
+    name: "L3 Mod (valoare bruta 0x8A)"
+    icon: "mdi:information-outline"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x8A);
+      if (v < 0) return {};
+      return (float) v;
+
+  - platform: wifi_signal
+    name: "Semnal WiFi Poarta"
+    update_interval: 30s
+    unit_of_measurement: "dBm"
+
+  # NOU: diagnoză
+  - platform: uptime
+    name: "Uptime Poarta"
+  - platform: debug
+    free:
+      name: "Heap liber"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Poarta"
+    ssid:
+      name: "SSID Conectat"
+    bssid:
+      name: "BSSID Conectat"   # NOU: vezi la ce AP e agățată placa
+  # NOU: diagnoză
+  - platform: debug
+    reset_reason:
+      name: "Reset reason"
+
+binary_sensor:
+  - platform: template
+    name: "Stare Blocare Poarta"
+    id: gate_lock_status
+    device_class: lock
+    # Logică HA: OFF = Locked, ON = Unlocked
+  - platform: status
+    name: "Status conexiune HA"
+
+# ELIMINAT: blocul interval: 1s (lambda-ul nu făcea nimic)
+
+#light:
+#  - platform: neopixelbus
+ #   type: GRB
+  #  variant: WS2812
+  #  pin: GPIO4
+  #  num_leds: 1
+  #  name: "Status LED"
+  #  id: status_led_rgb
+  #  internal: true
+  #  default_transition_length: 0s
+
+light:
+  - platform: esp32_rmt_led_strip
+    chipset: WS2812
+    channel_colors: GRB
+    pin: GPIO4
+    num_leds: 1
+    name: "Status LED"
+    id: status_led_rgb
+    internal: true
+    default_transition_length: 0s
+    
+switch:
+  # Toate switch-urile si numerele de mai jos CITESC starea reala din centrala (GET),
+  # nu mai sunt optimiste si NU mai scriu nimic la pornirea ESP-ului.
+  # Harta registrelor Robus (verificata prin citire, 26.11.2026):
+  #   0x80 L1 | 0x81 pauza (s) | 0x84 L2 | 0x85 asteptare dupa foto (s, centrala nu accepta 2) | 0x88 L3 | 0x89 L3 asteptare (s) | 0x8A L3 mod | 0x8C standby | 0x94 pre-flash
+  #   0x82, 0x83, 0x93 NU exista pe aceasta centrala (raspund cu eroare)
+  - platform: template
+    name: "Inchidere Automata (L1)"
+    icon: "mdi:timer-sync"
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x80);
+      if (v < 0) return {};
+      return v != 0;
+    turn_on_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x80, 0x01);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x80);'
+    turn_off_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x80, 0x00);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x80);'
+
+  - platform: template
+    name: "Inchidere dupa Foto (L2)"
+    icon: "mdi:motion-sensor"
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x84);
+      if (v < 0) return {};
+      return v != 0;
+    turn_on_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x84, 0x01);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x84);'
+    turn_off_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x84, 0x00);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x84);'
+
+  - platform: template
+    name: "Inchide Mereu (L3)"
+    icon: "mdi:door-closed-lock"
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x88);
+      if (v < 0) return {};
+      return v != 0;
+    turn_on_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x88, 0x01);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x88);'
+    turn_off_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x88, 0x00);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x88);'
+
+  - platform: template
+    name: "Mod Standby"
+    icon: "mdi:sleep"
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x8C);
+      if (v < 0) return {};
+      return v != 0;
+    turn_on_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x8C, 0x01);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x8C);'
+    turn_off_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x8C, 0x00);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x8C);'
+
+  - platform: template
+    name: "Pre-Flash"
+    icon: "mdi:car-light-high"
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x94);
+      if (v < 0) return {};
+      return v != 0;
+    turn_on_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x94, 0x01);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x94);'
+    turn_off_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x94, 0x00);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x94);'
+
+  # ELIMINAT: "Mod Peak (Putere maxima)" - registrul nu exista pe Robus (0x93 = eroare),
+  # iar vechiul 0x84 era de fapt L2.
+
+number:
+  - platform: template
+    name: "Durata Pauza (Secunde)"
+    icon: "mdi:clock-end"
+    min_value: 0
+    max_value: 250
+    step: 1
+    unit_of_measurement: "s"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x81);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x81, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x81);'
+
+  - platform: template
+    name: "Asteptare dupa Foto (Secunde)"
+    icon: "mdi:timer-sand"
+    min_value: 0
+    max_value: 30
+    step: 1
+    unit_of_measurement: "s"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x85);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x85, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x85);'
+
+  - platform: template
+    name: "L3 Asteptare inainte de inchidere (Secunde)"
+    icon: "mdi:timer-lock-outline"
+    min_value: 0
+    max_value: 250
+    step: 1
+    unit_of_measurement: "s"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x89);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x89, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x89);'
+
+  # Viteza si forta - registre verificate prin citire pe ROBUSR10 (26.11.2026):
+  #   0x42/0x43 viteza deschidere/inchidere = 100% | 0x45/0x46 viteza incetinire = 22% | 0x4A/0x4B forta = 70%
+  # ATENTIE: forta influenteaza detectia de obstacol (siguranta anti-strivire). Nu o creste fara motiv.
+  - platform: template
+    name: "Viteza Deschidere"
+    icon: "mdi:speedometer"
+    min_value: 10
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x42);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x42, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x42);'
+
+  - platform: template
+    name: "Viteza Inchidere"
+    icon: "mdi:speedometer-slow"
+    min_value: 10
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x43);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x43, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x43);'
+
+  - platform: template
+    name: "Viteza Incetinire Deschidere"
+    icon: "mdi:speedometer-slow"
+    min_value: 10
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x45);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x45, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x45);'
+
+  - platform: template
+    name: "Viteza Incetinire Inchidere"
+    icon: "mdi:speedometer-slow"
+    min_value: 10
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x46);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x46, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x46);'
+
+  - platform: template
+    name: "Forta Deschidere"
+    icon: "mdi:arm-flex"
+    min_value: 10
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x4A);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x4A, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x4A);'
+
+  - platform: template
+    name: "Forta Inchidere"
+    icon: "mdi:arm-flex"
+    min_value: 10
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    update_interval: 5s
+    lambda: |-
+      int16_t v = id(nice_cover).get_config_value(0x4B);
+      if (v < 0) return {};
+      return (float) v;
+    set_action:
+      - lambda: 'if (id(nice_cover).is_ready()) id(nice_cover).send_config_set(0x4B, (uint8_t) x);'
+      - delay: 700ms
+      - lambda: 'id(nice_cover).request_config(0x4B);'
+
+# Recitire periodica a parametrilor din centrala (si dupa pornire)
+interval:
+  - interval: 60s
+    then:
+      - lambda: |-
+          for (uint8_t reg : {0x42, 0x43, 0x45, 0x46, 0x4A, 0x4B, 0x80, 0x81, 0x84, 0x85, 0x88, 0x89, 0x8A, 0x8C, 0x94}) {
+            id(nice_cover).request_config(reg);
+          }
+
+lock:
+  - platform: template
+    name: "Securitate Poarta"
+    optimistic: true
+    lambda: |-
+      if (id(gate_lock_status).state) {
+        return LOCK_STATE_UNLOCKED;
+      } else {
+        return LOCK_STATE_LOCKED;
+      }
+    lock_action:
+      - lambda: |-
+          id(nice_cover).send_it4_cmd(0x0F);
+          id(gate_is_unlocked) = false; // persistă peste reboot
+          id(gate_lock_status).publish_state(false);
+    unlock_action:
+      - lambda: |-
+          id(nice_cover).send_it4_cmd(0x10);
+          id(gate_is_unlocked) = true; // persistă peste reboot
+          id(gate_lock_status).publish_state(true);
